@@ -1,7 +1,7 @@
 '''
 Date: 2023-05-01 23:25:51
 LastEditors: turtlepig
-LastEditTime: 2023-05-07 20:07:39
+LastEditTime: 2023-05-08 13:38:09
 '''
 '''
 Paddle 与 pytorch的API映射表：https://www.paddlepaddle.org.cn/documentation/docs/zh/guides/model_convert/pytorch_api_mapping_cn.html
@@ -33,6 +33,8 @@ from functools import partial
 import collections
 import time
 import json
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_data(filepath):
 
@@ -97,7 +99,7 @@ def getTokenizer(model_name):
 #源代码的简化版
 def map(data,trans_func):
     data = trans_func(data)
-    return
+    return data
 
 #在原案例中使用load_dataset()API默认读取到的数据集是MapDataset对象，MapDataset是paddle.io.Dataset的功能增强版本。其内置的map()方法适合用来进行批量数据集处理。map()方法传入的是一个用于数据处理的function。
 #由于在本案例中没有构造MapDataset类，因此参照源代码自行书写map函数
@@ -145,9 +147,9 @@ def get_tr_data_loader(tr_ds,berttokenizer):
 
     'token_type_ids': pad_sequence([torch.tensor(example['token_type_ids'][0]) for example in batch],batch_first= True,padding_value = berttokenizer.pad_token_type_id),
 
-    'start_positions' : torch.tensor([example['start_positions'] for example in batch],dtype='int64'),
+    'start_positions' : torch.tensor([example['start_positions'] for example in batch],dtype=torch.int64),
 
-    'end_positions' : torch.tensor([example['end_positions'] for example in batch], dtype='int64')
+    'end_positions' : torch.tensor([example['end_positions'] for example in batch], dtype=torch.int64)
     }
 
     train_data_loader = DataLoader(tr_ds,sampler=train_sampler,batch_size=batch_size,collate_fn=train_batchify_fn,pin_memory=True)
@@ -157,7 +159,7 @@ def get_tr_data_loader(tr_ds,berttokenizer):
 def get_dev_data_loader(dev_ds,berttokenizer):
 
     batch_size = 8
-    dev_sampler = BatchSampler(SequentialSampler(dev_ds),batch_size=batch_size)
+    dev_sampler = BatchSampler(SequentialSampler(dev_ds),batch_size=batch_size , drop_last=False)
 
     dev_batchify_fn = lambda batch:{
     'input_ids': pad_sequence([torch.tensor(example['input_ids'][0]) for example in batch],batch_first= True,padding_value = berttokenizer.pad_token_id),
@@ -165,7 +167,7 @@ def get_dev_data_loader(dev_ds,berttokenizer):
     'token_type_ids': pad_sequence([torch.tensor(example['token_type_ids'][0]) for example in batch],batch_first= True,padding_value = berttokenizer.pad_token_type_id)
     }
 
-    dev_data_loader = DataLoader(dev_ds,dev_sampler,batch_size=batch_size,collate_fn=dev_batchify_fn,pin_memory=True )
+    dev_data_loader = DataLoader(dev_ds,sampler=dev_sampler,batch_size = batch_size,collate_fn=dev_batchify_fn,pin_memory=True )
 
 
     return dev_data_loader
@@ -185,10 +187,9 @@ class CrossEntropyLossForSQuAD(nn.Module):
 
     def forward(self,y,label):
         start_logits, end_logits = y   # both shape are [batch_size, seq_len]
-
         start_position, end_position = label
-        start_position = start_position.unsqueeze(-1)
-        end_position = end_position.unsqueeze(-1)
+        # start_position = start_position.unsqueeze(-1)
+        # end_position = end_position.unsqueeze(-1)
 
         start_loss = F.cross_entropy(start_logits,start_position,reduction ='mean')
 
@@ -227,11 +228,11 @@ def evaluate(model, raw_data,data_loader):
 
   
 
-def train(tr_ds,dev_ds,model,tokenizer):
+def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader):
 
 
-    tr_dataloader = get_tr_data_loader(tr_ds, tokenizer)
-    dev_dataloader = get_dev_data_loader(dev_ds,tokenizer)
+    # tr_dataloader = get_tr_data_loader(tr_ds, tokenizer)
+    # dev_dataloader = get_dev_data_loader(dev_ds,tokenizer)
 
     # 训练过程中的最大学习率
     learning_rate = 3e-5 
@@ -248,25 +249,37 @@ def train(tr_ds,dev_ds,model,tokenizer):
 
 
     #学习率预热
+    
     # Generate parameter names needed to perform weight decay.
     # All bias and LayerNorm parameters are excluded.
     decay_param = [
-        p.name for n,p in model.parameters()
-        if not any(nd in n for nd in ["bias", "LayerNorm"])    
-    ]
-    optimizer = optim.AdamW(decay_param,lr=learning_rate,weight_decay=weight_decay)
+        p for n,p in model.named_parameters()
+        if not any(nd in n for nd in ["bias", "norm"])    
+    ] #注意这里不要使用p.name
+    optimizer = optim.AdamW(decay_param,lr = learning_rate,weight_decay=weight_decay)
 
     lr_schedule = get_linear_schedule_with_warmup(optimizer=optimizer,num_training_steps=num_training_steps,num_warmup_steps=num_warmup_steps)
 
     criterion = CrossEntropyLossForSQuAD()
     global_step = 0
 
+    print('-------------------------------------------------')
+    print("开始训练")
     for epoch in range(epochs+1):
         for step,batch in enumerate(tr_dataloader,start=1):
             global_step += 1
-            input_ids,segment_ids,start_positions,end_positions = batch
-            logits = model(input_ids=input_ids,token_type_ids=segment_ids)
-            loss = criterion(logits,(start_positions,end_positions))
+            # input_ids,segment_ids,start_positions,end_positions = batch
+            input_ids = batch['input_ids']
+            segment_ids = batch['token_type_ids']
+            start_positions = batch['start_positions']
+            end_positions = batch['end_positions']
+            logits = model(input_ids = input_ids,token_type_ids = segment_ids)
+
+            start_logits = logits['start_logits']
+            end_logits = logits['end_logits']
+            logits = (start_logits,end_logits)
+
+            loss = criterion(logits,(start_positions,end_positions)) #y, label
 
             if global_step % 100 == 0 :
                 print("global step %d, epoch: %d, batch: %d, loss: %.5f" % (global_step, epoch, step, loss))
@@ -276,23 +289,35 @@ def train(tr_ds,dev_ds,model,tokenizer):
             lr_schedule.step()
             optimizer.zero_grad()
         
-        evaluate(model = model ,raw_data= dev_ds ,data_loader= dev_dataloader)
+        evaluate(model = model ,raw_data = dev_ds_raw ,data_loader = dev_dataloader)
     
+    
+    print("正在保存模型")
     model.save_pretrained('./checkpoint')
     tokenizer.save_pretrained('./checkpoint')
+    print('-------------------------------------------------')
+
+    return model,dev_dataloader
 
 #模型预测
 # ----------------------------------------------------
 @torch.no_grad()
 def do_predict(model,raw_data,data_loader):
 
+    print('------------------------------------------------')
+    print("开始模型预测")
     model.eval()
     all_start_logits = []
     all_end_logits = []
     tic_eval = time.time()
     for batch in data_loader:
-        input_ids,token_type_ids = batch
-        start_logits_tensor,end_logits_tensor = model(input_ids,token_type_ids) 
+        # input_ids,token_type_ids = batch
+        input_ids = batch['input_ids']
+        token_type_ids = batch['token_type_ids']
+        # start_logits_tensor,end_logits_tensor = model(input_ids,token_type_ids) 
+        logits = model(input_ids,token_type_ids)
+        start_logits_tensor = logits['start_logits']
+        end_logits_tensor = logits['end_logits']
 
         for idx in range(start_logits_tensor.shape[0]):
             if len(all_start_logits) % 1000 == 0 and len(all_start_logits):
@@ -303,12 +328,14 @@ def do_predict(model,raw_data,data_loader):
             all_start_logits.append(start_logits_tensor.numpy()[idx])
             all_end_logits.append(end_logits_tensor.numpy()[idx])
 
+    
     all_predictions, _, _ = compute_prediction(
         raw_data, data_loader.dataset.dataset,
         (all_start_logits, all_end_logits), False, 20, 30)   
+    print("模型预测结束")
+    print('------------------------------------------------')
 
     count = 0
-
     for example in raw_data:
         
         count += 1
@@ -327,17 +354,24 @@ if __name__ == '__main__':
 
     filepath = './data'
 
-    tr_ds,dev_ds = load_data(filepath)
-    tr_ds = extract_data(tr_ds)
-    dev_ds = extract_data(dev_ds)
+    tr_ds_raw,dev_ds_raw = load_data(filepath)
+    tr_ds_raw = extract_data(tr_ds_raw)
+    dev_ds_raw = extract_data(dev_ds_raw)
 
     model_name = 'bert-base-chinese'
 
     berttokenizer = getTokenizer(model_name)
     model = get_model(model_name)
 
+    tr_ds = trans_features(tr_ds_raw,tokenizer = berttokenizer,tr_or_dev='train')
+    dev_ds = trans_features(dev_ds_raw,tokenizer=berttokenizer,tr_or_dev='dev')
 
-    tr_ds = trans_features(tr_ds,tokenizer = berttokenizer,tr_or_dev='train')
-    dev_ds = trans_features(dev_ds,tokenizer=berttokenizer,tr_or_dev='dev')
+
+    tr_dataloader = get_tr_data_loader(tr_ds, berttokenizer)
+    dev_dataloader = get_dev_data_loader(dev_ds,berttokenizer)
+
+    model,dev_dataloader = train(dev_ds_raw=dev_ds_raw,model = model ,tokenizer=berttokenizer, tr_dataloader=tr_dataloader ,dev_dataloader=dev_dataloader)
+
+    do_predict(model=model , raw_data= dev_ds_raw ,data_loader = dev_dataloader)
 
 
