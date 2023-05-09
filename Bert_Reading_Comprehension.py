@@ -1,16 +1,13 @@
 '''
 Date: 2023-05-01 23:25:51
 LastEditors: turtlepig
-LastEditTime: 2023-05-08 13:38:09
+LastEditTime: 2023-05-09 10:36:39
 '''
 '''
 Paddle 与 pytorch的API映射表：https://www.paddlepaddle.org.cn/documentation/docs/zh/guides/model_convert/pytorch_api_mapping_cn.html
 涉及到的库可以参照上述链接进行更改
 '''
 import os
-import jieba
-import random
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,9 +15,9 @@ import torch.nn.init as I
 from torch.nn.utils.rnn import pad_sequence
 import torch.optim as optim
 import torch.utils.data  
-# from datasets import Dataset,Features,Value
-from torch.utils.data import RandomSampler,DataLoader,BatchSampler,SequentialSampler
-# from datasets import load_dataset
+
+from torch.utils.data import RandomSampler,DataLoader,SequentialSampler
+
 
 import matplotlib.pyplot as plt
 import transformers
@@ -34,7 +31,6 @@ import collections
 import time
 import json
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_data(filepath):
 
@@ -74,17 +70,6 @@ def extract_data(data):
                     text = answer['text']
                     answer_start = answer['answer_start']
                     results.append({'question':question, 'id':id,'context':context,'answers':text,'answer_starts':answer_start})
-
-    #     features = Features({
-    #     'id': Value('string'),
-    #     'question': Value('string'),
-    #     'context': Value('string'),
-    #     'answers': Value('string'),
-    #     'answer_starts': Value('int32'),
-    # })
-
-    
-    # results = Dataset.from_list(results, features)
                     
     return results
 
@@ -159,7 +144,7 @@ def get_tr_data_loader(tr_ds,berttokenizer):
 def get_dev_data_loader(dev_ds,berttokenizer):
 
     batch_size = 8
-    dev_sampler = BatchSampler(SequentialSampler(dev_ds),batch_size=batch_size , drop_last=False)
+    dev_sampler = SequentialSampler(dev_ds)
 
     dev_batchify_fn = lambda batch:{
     'input_ids': pad_sequence([torch.tensor(example['input_ids'][0]) for example in batch],batch_first= True,padding_value = berttokenizer.pad_token_id),
@@ -167,7 +152,7 @@ def get_dev_data_loader(dev_ds,berttokenizer):
     'token_type_ids': pad_sequence([torch.tensor(example['token_type_ids'][0]) for example in batch],batch_first= True,padding_value = berttokenizer.pad_token_type_id)
     }
 
-    dev_data_loader = DataLoader(dev_ds,sampler=dev_sampler,batch_size = batch_size,collate_fn=dev_batchify_fn,pin_memory=True )
+    dev_data_loader = DataLoader(dev_ds,sampler=dev_sampler,batch_size = batch_size,collate_fn=dev_batchify_fn,pin_memory=True)
 
 
     return dev_data_loader
@@ -200,7 +185,7 @@ class CrossEntropyLossForSQuAD(nn.Module):
         return total_loss
 
 @torch.no_grad()
-def evaluate(model, raw_data,data_loader):
+def evaluate(model, raw_data,data_loader,device):
 
     model.eval()
     all_start_logits = []
@@ -208,8 +193,13 @@ def evaluate(model, raw_data,data_loader):
     tic_eval = time.time()
 
     for batch in data_loader:
-        input_ids,token_type_ids = batch
-        start_logits_tensor,end_logits_tensor = model(input_ids,token_type_ids) 
+        
+        input_ids = batch['input_ids'].to(device)
+        token_type_ids = batch['token_type_ids'].to(device)
+
+        logits = model(input_ids,token_type_ids)
+        start_logits_tensor = logits['start_logits'].cpu()
+        end_logits_tensor = logits['end_logits'].cpu()
     
         for idx in range(start_logits_tensor.shape[0]):
             if len(all_start_logits) % 1000 == 0 and len(all_start_logits):
@@ -228,7 +218,7 @@ def evaluate(model, raw_data,data_loader):
 
   
 
-def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader):
+def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader,device):
 
 
     # tr_dataloader = get_tr_data_loader(tr_ds, tokenizer)
@@ -263,20 +253,21 @@ def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader):
     criterion = CrossEntropyLossForSQuAD()
     global_step = 0
 
+
     print('-------------------------------------------------')
     print("开始训练")
     for epoch in range(epochs+1):
         for step,batch in enumerate(tr_dataloader,start=1):
             global_step += 1
             # input_ids,segment_ids,start_positions,end_positions = batch
-            input_ids = batch['input_ids']
-            segment_ids = batch['token_type_ids']
-            start_positions = batch['start_positions']
-            end_positions = batch['end_positions']
+            input_ids = batch['input_ids'].to(device)
+            segment_ids = batch['token_type_ids'].to(device)
+            start_positions = batch['start_positions'].to(device)
+            end_positions = batch['end_positions'].to(device)
             logits = model(input_ids = input_ids,token_type_ids = segment_ids)
 
-            start_logits = logits['start_logits']
-            end_logits = logits['end_logits']
+            start_logits = logits['start_logits'].to(device)
+            end_logits = logits['end_logits'].to(device)
             logits = (start_logits,end_logits)
 
             loss = criterion(logits,(start_positions,end_positions)) #y, label
@@ -289,7 +280,7 @@ def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader):
             lr_schedule.step()
             optimizer.zero_grad()
         
-        evaluate(model = model ,raw_data = dev_ds_raw ,data_loader = dev_dataloader)
+        evaluate(model = model ,raw_data = dev_ds_raw ,data_loader = dev_dataloader,device = device)
     
     
     print("正在保存模型")
@@ -297,12 +288,12 @@ def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader):
     tokenizer.save_pretrained('./checkpoint')
     print('-------------------------------------------------')
 
-    return model,dev_dataloader
+    return model
 
 #模型预测
 # ----------------------------------------------------
 @torch.no_grad()
-def do_predict(model,raw_data,data_loader):
+def do_predict(model,raw_data,data_loader,device):
 
     print('------------------------------------------------')
     print("开始模型预测")
@@ -312,13 +303,12 @@ def do_predict(model,raw_data,data_loader):
     tic_eval = time.time()
     for batch in data_loader:
         # input_ids,token_type_ids = batch
-        input_ids = batch['input_ids']
-        token_type_ids = batch['token_type_ids']
+        input_ids = batch['input_ids'].to(device)
+        token_type_ids = batch['token_type_ids'].to(device)
         # start_logits_tensor,end_logits_tensor = model(input_ids,token_type_ids) 
         logits = model(input_ids,token_type_ids)
-        start_logits_tensor = logits['start_logits']
-        end_logits_tensor = logits['end_logits']
-
+        start_logits_tensor = logits['start_logits'].cpu()
+        end_logits_tensor = logits['end_logits'].cpu()
         for idx in range(start_logits_tensor.shape[0]):
             if len(all_start_logits) % 1000 == 0 and len(all_start_logits):
                 print("Processing example: %d" % len(all_start_logits))
@@ -327,10 +317,11 @@ def do_predict(model,raw_data,data_loader):
 
             all_start_logits.append(start_logits_tensor.numpy()[idx])
             all_end_logits.append(end_logits_tensor.numpy()[idx])
+    
 
     
     all_predictions, _, _ = compute_prediction(
-        raw_data, data_loader.dataset.dataset,
+        raw_data, data_loader.dataset,
         (all_start_logits, all_end_logits), False, 20, 30)   
     print("模型预测结束")
     print('------------------------------------------------')
@@ -358,20 +349,24 @@ if __name__ == '__main__':
     tr_ds_raw = extract_data(tr_ds_raw)
     dev_ds_raw = extract_data(dev_ds_raw)
 
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     model_name = 'bert-base-chinese'
 
     berttokenizer = getTokenizer(model_name)
     model = get_model(model_name)
+    model = model.to(device)
 
     tr_ds = trans_features(tr_ds_raw,tokenizer = berttokenizer,tr_or_dev='train')
-    dev_ds = trans_features(dev_ds_raw,tokenizer=berttokenizer,tr_or_dev='dev')
+    dev_ds = trans_features(dev_ds_raw,tokenizer = berttokenizer,tr_or_dev='dev')
 
 
     tr_dataloader = get_tr_data_loader(tr_ds, berttokenizer)
     dev_dataloader = get_dev_data_loader(dev_ds,berttokenizer)
 
-    model,dev_dataloader = train(dev_ds_raw=dev_ds_raw,model = model ,tokenizer=berttokenizer, tr_dataloader=tr_dataloader ,dev_dataloader=dev_dataloader)
+    model = train(dev_ds_raw=dev_ds_raw,model = model ,tokenizer=berttokenizer, tr_dataloader=tr_dataloader ,dev_dataloader=dev_dataloader,device=device)
 
-    do_predict(model=model , raw_data= dev_ds_raw ,data_loader = dev_dataloader)
+    do_predict(model=model , raw_data= dev_ds_raw ,data_loader = dev_dataloader , device=device)
 
 

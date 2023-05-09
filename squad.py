@@ -1,7 +1,7 @@
 '''
 Date: 2023-05-02 18:49:15
 LastEditors: turtlepig
-LastEditTime: 2023-05-02 19:50:26
+LastEditTime: 2023-05-09 00:33:23
 
 Description:重写paddlenlp库中的metrics.squad.squad_evaluate()/compute_prediction()
 
@@ -21,7 +21,7 @@ def compute_prediction(
     version_2_with_negative=False,
     n_best_size=20,
     max_answer_length=30,
-    null_score_diff_threshold=0.0,
+    null_score_diff_threshold=0.0
 ):
     """
     Post-processes the predictions of a question-answering model to convert them to answers that are substrings of the original contexts. This is the base postprocessing functions for models that only return start and end logits.
@@ -44,7 +44,8 @@ def compute_prediction(
     assert len(predictions[0]) == len(features), "Number of predictions should be equal to number of features."
 
     # Build a map example to its corresponding features.
-    example_id_to_index = {k: i for i, k in enumerate(examples["id"])}
+    # example_id_to_index = {k: i for i, k in enumerate(examples["id"])}
+    example_id_to_index = {k['id']: i for i, k in enumerate(examples)}
     features_per_example = collections.defaultdict(list)
     for i, feature in enumerate(features):
         features_per_example[example_id_to_index[feature["example_id"]]].append(i)
@@ -69,7 +70,7 @@ def compute_prediction(
             start_logits = all_start_logits[feature_index]
             end_logits = all_end_logits[feature_index]
             # This is what will allow us to map some the positions in our logits to span of texts in the original context.
-            offset_mapping = features[feature_index]["offset_mapping"]
+            offset_mapping = features[feature_index]["offset_mapping"][0]
             # Optional `token_is_max_context`, if provided we will remove answers that do not have the maximum context available in the current feature.
             token_is_max_context = features[feature_index].get("token_is_max_context", None)
 
@@ -129,6 +130,7 @@ def compute_prediction(
         context = example["context"]
         for pred in predictions:
             offsets = pred.pop("offsets")
+
             pred["text"] = context[offsets[0] : offsets[1]]
 
         # In the very rare edge case we have not a single non-null prediction, we create a fake prediction to avoid failure.
@@ -177,7 +179,7 @@ def make_qid_to_has_ans(examples):
         if "is_impossible" in example:
             has_ans = example["is_impossible"]
         else:
-            has_ans = not len(example["answers"]["answer_start"]) == 0
+            has_ans = not len([example["answer_starts"]])  == 0  #2023.0509 0.31 with the error
         qid_to_has_ans[example["id"]] = has_ans
     return qid_to_has_ans
 
@@ -276,7 +278,7 @@ def get_raw_scores(examples, preds, is_whitespace_splited=True):
     f1_scores = {}
     for example in examples:
         qid = example["id"]
-        gold_answers = [text for text in example["answers"]["text"] if normalize_answer(text)]
+        gold_answers = [text for text in example["answers"] if normalize_answer(text)]
         if not gold_answers:
             # For unanswerable questions, only correct answer is empty string
             gold_answers = [""]

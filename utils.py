@@ -1,7 +1,7 @@
 '''
 Date: 2023-05-02 15:42:22
 LastEditors: turtlepig
-LastEditTime: 2023-05-02 18:58:24
+LastEditTime: 2023-05-08 10:10:40
 '''
 import collections
 import time
@@ -20,8 +20,7 @@ def evaluate(model, data_loader):
 
     for batch in data_loader:
         input_ids, token_type_ids = batch
-        start_logits_tensor, end_logits_tensor = model(input_ids,
-                                                       token_type_ids)
+        start_logits_tensor, end_logits_tensor = model(input_ids,token_type_ids)
 
         for idx in range(start_logits_tensor.shape[0]):
             if len(all_start_logits) % 1000 == 0 and len(all_start_logits):
@@ -63,36 +62,50 @@ def prepare_train_features(examples,tokenizer,doc_stride,max_seq_length):
     # Tokenize our examples with truncation and maybe padding, but keep the overflows using a stride. This results
     # in one example possible giving several features when a context is long, each of those features having a
     # context that overlaps a bit the context of the previous feature.
-    contexts = [examples[i]['context'] for i in range(len(examples))]
-    questions = [examples[i]['question'] for i in range(len(examples))]
 
-    tokenized_examples = tokenizer(
-        questions,
-        contexts,
+    # contexts = [examples[i]['context'] for i in range(len(examples))]
+    # questions = [examples[i]['question'] for i in range(len(examples))]
+
+    tokenized_examples = []
+
+    for i in range(len(examples)):
+        context = examples[i]['context']
+        question = examples[i]['question']
+
+        tokenized_example = tokenizer(
+        question,
+        context,
         stride=doc_stride,
-        max_seq_len=max_seq_length)
+        max_length=max_seq_length,
+        return_offsets_mapping=True,
+        return_overflowing_tokens=True)
+        
+        tokenized_examples.append(tokenized_example)
 
     # Let's label those examples!
     for i, tokenized_example in enumerate(tokenized_examples):
         # We will label impossible answers with the index of the CLS token.
-        input_ids = tokenized_example["input_ids"]
+        # print(tokenized_example)
+        input_ids = tokenized_example['input_ids'][0]  #使用BertTokenizerFast结果会保存在一个list当中，下同
         cls_index = input_ids.index(tokenizer.cls_token_id)
 
-        # The offset mappings will give us a map from token to character position in the original context. This will
-        # help us compute the start_positions and end_positions.
-        offsets = tokenized_example['offset_mapping']
+        # The offset mappings will give us a map from token to character position in the original context. This will help us compute the start_positions and end_positions.
+        offsets = tokenized_example['offset_mapping'][0]
 
         # Grab the sequence corresponding to that example (to know what is the context and what is the question).
-        sequence_ids = tokenized_example['token_type_ids']
+        sequence_ids = tokenized_example['token_type_ids'][0]
 
         # One example can give several spans, this is the index of the example containing this span of text.
-        sample_index = tokenized_example['overflow_to_sample']
+        sample_index = tokenized_example['overflow_to_sample_mapping'][0]
+
         answers = examples[sample_index]['answers']
         answer_starts = examples[sample_index]['answer_starts']
 
         # Start/end character index of the answer in the text.
-        start_char = answer_starts[0]
-        end_char = start_char + len(answers[0])
+        # start_char = answer_starts[0]
+        # end_char = start_char + len(answers[0])
+        start_char = answer_starts
+        end_char = start_char + len(answers)
 
         # Start token index of the current span in the text.
         token_start_index = 0
@@ -128,29 +141,47 @@ def prepare_validation_features(examples,tokenizer,doc_stride,max_seq_length):
     # Tokenize our examples with truncation and maybe padding, but keep the overflows using a stride. This results
     # in one example possible giving several features when a context is long, each of those features having a
     # context that overlaps a bit the context of the previous feature.
-    contexts = [examples[i]['context'] for i in range(len(examples))]
-    questions = [examples[i]['question'] for i in range(len(examples))]
 
-    tokenized_examples = tokenizer(
-        questions,
-        contexts,
+    # contexts = [examples[i]['context'] for i in range(len(examples))]
+    # questions = [examples[i]['question'] for i in range(len(examples))]
+
+    # tokenized_examples = tokenizer(
+    #     questions,
+    #     contexts,
+    #     stride=doc_stride,
+    #     max_seq_len=max_seq_length)
+
+    tokenized_examples = []
+
+    for i in range(len(examples)):
+
+        context = examples[i]['context']
+        question = examples[i]['question']
+
+        tokenized_example = tokenizer(
+        question,
+        context,
         stride=doc_stride,
-        max_seq_len=max_seq_length)
+        max_length=max_seq_length,
+        return_offsets_mapping=True,
+        return_overflowing_tokens=True)
+
+        tokenized_examples.append(tokenized_example)
 
     # For validation, there is no need to compute start and end positions
     for i, tokenized_example in enumerate(tokenized_examples):
         # Grab the sequence corresponding to that example (to know what is the context and what is the question).
-        sequence_ids = tokenized_example['token_type_ids']
+        sequence_ids = tokenized_example['token_type_ids'][0]
 
         # One example can give several spans, this is the index of the example containing this span of text.
-        sample_index = tokenized_example['overflow_to_sample']
+        sample_index = tokenized_example['overflow_to_sample_mapping'][0]
         tokenized_examples[i]["example_id"] = examples[sample_index]['id']
 
         # Set to None the offset_mapping that are not part of the context so it's easy to determine if a token
         # position is part of the context or not.
-        tokenized_examples[i]["offset_mapping"] = [
+        tokenized_examples[i]["offset_mapping"][0] = [
             (o if sequence_ids[k] == 1 else None)
-            for k, o in enumerate(tokenized_example["offset_mapping"])
+            for k, o in enumerate(tokenized_example["offset_mapping"][0])
         ]
 
     return tokenized_examples
