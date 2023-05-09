@@ -1,7 +1,7 @@
 '''
 Date: 2023-05-01 23:25:51
 LastEditors: turtlepig
-LastEditTime: 2023-05-09 10:36:39
+LastEditTime: 2023-05-09 15:16:49
 '''
 '''
 Paddle 与 pytorch的API映射表：https://www.paddlepaddle.org.cn/documentation/docs/zh/guides/model_convert/pytorch_api_mapping_cn.html
@@ -27,7 +27,6 @@ from utils import prepare_train_features, prepare_validation_features
 from squad import compute_prediction,squad_evaluate
 from functools import partial
 
-import collections
 import time
 import json
 
@@ -56,6 +55,8 @@ def load_data(filepath):
 
 def extract_data(data):
     #源数据结构复杂，重新构建一个结构简单的字典列表，方便后续处理 train和dev数据结构基本一致，可以直接调用相同函数
+    
+    #需要注意的是dev数据中存在一个question多个answer的情况
     results = []
     for article in data:
         paragraphs = article['paragraphs']
@@ -66,10 +67,14 @@ def extract_data(data):
                 question = q['question']
                 id = q['id']
                 answers = q['answers']
+                text_temp = []
+                answer_start_temp = []
                 for answer in answers:
                     text = answer['text']
+                    text_temp.append(text)
                     answer_start = answer['answer_start']
-                    results.append({'question':question, 'id':id,'context':context,'answers':text,'answer_starts':answer_start})
+                    answer_start_temp.append(answer_start)
+                results.append({'question':question, 'id':id,'context':context,'answers':text_temp,'answer_starts':answer_start_temp})
                     
     return results
 
@@ -173,8 +178,6 @@ class CrossEntropyLossForSQuAD(nn.Module):
     def forward(self,y,label):
         start_logits, end_logits = y   # both shape are [batch_size, seq_len]
         start_position, end_position = label
-        # start_position = start_position.unsqueeze(-1)
-        # end_position = end_position.unsqueeze(-1)
 
         start_loss = F.cross_entropy(start_logits,start_position,reduction ='mean')
 
@@ -212,17 +215,14 @@ def evaluate(model, raw_data,data_loader,device):
         
     all_predictions, _ ,_ = compute_prediction(raw_data,data_loader.dataset,(all_start_logits,all_end_logits),False,20,30)
 
-    squad_evaluate(examples=raw_data,preds= all_predictions,is_whitespace_splited=False)
+    out_eval=squad_evaluate(examples=raw_data,preds= all_predictions,is_whitespace_splited=False)
+    print(out_eval)
 
     model.train()
 
   
 
 def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader,device):
-
-
-    # tr_dataloader = get_tr_data_loader(tr_ds, tokenizer)
-    # dev_dataloader = get_dev_data_loader(dev_ds,tokenizer)
 
     # 训练过程中的最大学习率
     learning_rate = 3e-5 
@@ -291,7 +291,6 @@ def train(dev_ds_raw,model,tokenizer,tr_dataloader,dev_dataloader,device):
     return model
 
 #模型预测
-# ----------------------------------------------------
 @torch.no_grad()
 def do_predict(model,raw_data,data_loader,device):
 

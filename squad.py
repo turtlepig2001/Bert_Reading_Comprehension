@@ -1,7 +1,7 @@
 '''
 Date: 2023-05-02 18:49:15
 LastEditors: turtlepig
-LastEditTime: 2023-05-09 00:33:23
+LastEditTime: 2023-05-09 15:16:29
 
 Description:重写paddlenlp库中的metrics.squad.squad_evaluate()/compute_prediction()
 
@@ -10,7 +10,6 @@ Details:对底层代码做了微小改动，其中的英文注释未作翻译，
 import collections
 import re
 import string
-import json
 import numpy as np
 
 
@@ -179,7 +178,7 @@ def make_qid_to_has_ans(examples):
         if "is_impossible" in example:
             has_ans = example["is_impossible"]
         else:
-            has_ans = not len([example["answer_starts"]])  == 0  #2023.0509 0.31 with the error
+            has_ans = not len(example["answer_starts"])  == 0  #2023.0509 0.31 with the error
         qid_to_has_ans[example["id"]] = has_ans
     return qid_to_has_ans
 

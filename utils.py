@@ -1,9 +1,8 @@
 '''
 Date: 2023-05-02 15:42:22
 LastEditors: turtlepig
-LastEditTime: 2023-05-08 10:10:40
+LastEditTime: 2023-05-09 15:16:36
 '''
-import collections
 import time
 import json
 from squad import compute_prediction,squad_evaluate
@@ -63,9 +62,6 @@ def prepare_train_features(examples,tokenizer,doc_stride,max_seq_length):
     # in one example possible giving several features when a context is long, each of those features having a
     # context that overlaps a bit the context of the previous feature.
 
-    # contexts = [examples[i]['context'] for i in range(len(examples))]
-    # questions = [examples[i]['question'] for i in range(len(examples))]
-
     tokenized_examples = []
 
     for i in range(len(examples)):
@@ -102,10 +98,10 @@ def prepare_train_features(examples,tokenizer,doc_stride,max_seq_length):
         answer_starts = examples[sample_index]['answer_starts']
 
         # Start/end character index of the answer in the text.
-        # start_char = answer_starts[0]
-        # end_char = start_char + len(answers[0])
-        start_char = answer_starts
-        end_char = start_char + len(answers)
+        start_char = answer_starts[0]
+        end_char = start_char + len(answers[0])
+        # start_char = answer_starts
+        # end_char = start_char + len(answers)
 
         # Start token index of the current span in the text.
         token_start_index = 0
@@ -141,15 +137,6 @@ def prepare_validation_features(examples,tokenizer,doc_stride,max_seq_length):
     # Tokenize our examples with truncation and maybe padding, but keep the overflows using a stride. This results
     # in one example possible giving several features when a context is long, each of those features having a
     # context that overlaps a bit the context of the previous feature.
-
-    # contexts = [examples[i]['context'] for i in range(len(examples))]
-    # questions = [examples[i]['question'] for i in range(len(examples))]
-
-    # tokenized_examples = tokenizer(
-    #     questions,
-    #     contexts,
-    #     stride=doc_stride,
-    #     max_seq_len=max_seq_length)
 
     tokenized_examples = []
 
